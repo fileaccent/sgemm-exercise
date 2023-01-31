@@ -19,7 +19,7 @@ const int WAVE_SIZE = 32;
 
 // transfer float4
 #define FETCH_FLOAT4(pointer) (reinterpret_cast<float4*>(&(pointer))[0])
-
+#define FLOAT2(pointer) (reinterpret_cast<float2*>(&(pointer))[0])
 #define FLOAT4(pointer) (reinterpret_cast<float4*>(&(pointer))[0])
 #define ErrChk(code) { Assert((code), __FILE__, __LINE__); }
 static inline void Assert(cudaError_t  code, const char *file, int line){
@@ -121,6 +121,28 @@ static inline void Assert(cudaError_t  code, const char *file, int line){
     free(h_B);\
     free(h_C);
 
+__device__ void set_value(float* dst, float* source, int n) {
+    int i = 0;
+    while (i < n) {
+       if (i + 3 < n) {
+          FLOAT4(dst[i]) = FLOAT4(source[i]);
+          i += 4;
+       } else if (i + 1 < n) {
+          FLOAT2(dst[i]) = FLOAT2(source[i]);
+          i += 2;
+       } else if (i < n) {
+          dst[i] = source[i];
+          i++;
+       }
+    }
+}
+
+__device__ void set_value_matrix(float* dst, float* source, int dst_m, int dst_n, int dst_lda, int source_lda) {
+    for (int i = 0; i < dst_m; i++) {
+        set_value(&dst[i * dst_lda], &source[i * source_lda], dst_n);
+    }
+}
+
 float cublas_result() {
     test_start();
     int thread_size = 32;
@@ -128,11 +150,11 @@ float cublas_result() {
     cublasCreate(&handle);
     float alpha = 1.0f;
     float beta = 0.0f;
-    cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, M, N, K, &alpha, d_a, K, d_b, N, &beta, d_c, N);
+    cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, M, N, K, &alpha, d_A, K, d_B, N, &beta, d_C, N);
     KernelErrChk();
     cudaEventRecord(start, 0);
     for (int i = 0; i < iteration; i++) {
-        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, M, N, K, &alpha, d_a, K, d_b, N, &beta, d_c, N);
+        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, M, N, K, &alpha, d_A, K, d_B, N, &beta, d_C, N);
     }
     test_end();
     // rocblas_destroy_handle(handle);
@@ -158,10 +180,10 @@ int main () {
     // 一个块最多由1024个线程
     
     cout << "warp: " << WAVE_SIZE << endl;
-    // rocblas版本
-    baseTime = rocblas_result();
+    // cublas版本
+    baseTime = cublas_result();
     Tflops = 2 * ((float)M * N * K) / (baseTime / 1000) / 1e12;
-    cout << "rocblas: " << baseTime << "ms" << ", Tflops: " << Tflops << endl;
+    cout << "cublas: " << baseTime << "ms" << ", Tflops: " << Tflops << endl;
 
     // baseTime = test1();
     // 1. 无优化版本
@@ -232,6 +254,11 @@ int main () {
     nowTime = test7_1();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
     cout << "test7_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
+    // 7.2 融合8的所有优化
+    nowTime = test7_2();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test7_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
     preTime = nowTime;
     // 8. 分为 warp 块执行, 无效果
     nowTime = test8();
