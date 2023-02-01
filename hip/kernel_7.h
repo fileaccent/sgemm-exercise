@@ -1,18 +1,8 @@
 #define prefetch7()\
-    pre_thread_num = (m * k + blockDim.x - 1)/ blockDim.x;\
-    ix = threadIdx.x * pre_thread_num;\
-    A_m_index = ix / k;\
-    A_n_index = ix % k;\
-    int d_A_index = (M_tile_index * m + A_m_index) * K + K_tile_index * k + A_n_index;\
     ix = A_m_index * (k + padding) + A_n_index;\
-    FLOAT4(A_sh[ix]) = FLOAT4(d_A[d_A_index]);\
-    pre_thread_num = (k * n + blockDim.x - 1) / blockDim.x;\
-    ix = threadIdx.x * pre_thread_num;\
-    B_m_index = ix / n;\
-    B_n_index = ix % n;\
+    FLOAT4(A_sh[ix]) = FLOAT4(d_A[d_A_index + K_tile_index * k]);\
     ix = B_m_index * (n + padding) + B_n_index;\
-    int d_B_index = (K_tile_index * k + B_m_index) * N + N_tile_index * n + B_n_index;\
-    FLOAT4(B_sh[ix]) = FLOAT4(d_B[d_B_index]);
+    FLOAT4(B_sh[ix]) = FLOAT4(d_B[d_B_index + K_tile_index * k * N]);
 __global__ void gemm_kernel7(float *d_A, float *d_B, float *d_C, int M, int N, int K, int m, int n, int k) {
     int padding = 4; 
     // 16 * 16 = 256
@@ -34,9 +24,20 @@ __global__ void gemm_kernel7(float *d_A, float *d_B, float *d_C, int M, int N, i
     int B_n_index;
     int C_m_index = threadIdx.x / ((n + TN - 1) / TN); // tile内的4 * 4行号
     int C_n_index = threadIdx.x % ((n + TN - 1) / TN); // tile内的4 * 4列号
-    int pre_thread_num;
+    int A_pre_thread_num;
+    int B_pre_thread_num;
     int ix;
-    // printf("m_index: %d, n_index: %d\n", m_index, n_index);
+    const int d_A_index = (M_tile_index * m + A_m_index) * K + A_n_index;
+    const int d_B_index = (B_m_index) * N + N_tile_index * n + B_n_index;;
+    A_pre_thread_num = (m * k + blockDim.x - 1)/ blockDim.x;
+    ix = threadIdx.x * A_pre_thread_num;
+    A_m_index = ix / k;
+    A_n_index = ix % k;
+    B_pre_thread_num = (k * n + blockDim.x - 1) / blockDim.x;\
+    ix = threadIdx.x * B_pre_thread_num;\
+    B_m_index = ix / n;\
+    B_n_index = ix % n;\
+
     float reg_A[TM][TK];
     float reg_B[TK][TN];
     float reg_C[TM][TN] = {0.0f};
@@ -281,6 +282,406 @@ float test7_2 () {
     ErrChk(hipEventRecord(start, 0));
     for (int i = 0; i < iteration; i++) {
         gemm_kernel7_2<<<block, thread,  shared_size>>>(d_A, d_B, d_C, M, N, K, m, n, k);
+    }
+    test_end();
+    return elapsedTime / iteration;
+}
+
+#define prefetch7_3()\
+    ix = threadIdx.x * A_pre_thread_num;\
+    A_m_index = ix / k;\
+    A_n_index = ix % k;\
+    int d_A_index = (M_tile_index * m + A_m_index) * K + K_tile_index * k + A_n_index;\
+    ix = A_m_index * (k + padding) + A_n_index;\
+    FLOAT4(A_sh[ix]) = FLOAT4(d_A[d_A_index]);\
+    ix = threadIdx.x * B_pre_thread_num;\
+    B_m_index = ix / n;\
+    B_n_index = ix % n;\
+    ix = B_m_index * (n + padding) + B_n_index;\
+    int d_B_index = (K_tile_index * k + B_m_index) * N + N_tile_index * n + B_n_index;\
+    FLOAT4(B_sh[ix]) = FLOAT4(d_B[d_B_index]);
+#define calc_k_fma1()\
+    reg_C[0][0] += reg_A[0][0] * reg_B[0][0];\
+    reg_C[0][1] += reg_A[0][0] * reg_B[0][1];\
+    reg_C[0][2] += reg_A[0][0] * reg_B[0][2];\
+    reg_C[0][3] += reg_A[0][0] * reg_B[0][3];\
+    \
+    FLOAT2(reg_A[1][0]) = FLOAT2(A_sh[A_index + (k + padding)]);\
+    \
+    reg_C[1][0] += reg_A[1][0] * reg_B[0][0];\
+    reg_C[1][1] += reg_A[1][0] * reg_B[0][1];\
+    reg_C[1][2] += reg_A[1][0] * reg_B[0][2];\
+    reg_C[1][3] += reg_A[1][0] * reg_B[0][3];\
+    \
+    FLOAT2(reg_A[2][0]) = FLOAT2(A_sh[A_index + 2 * (k + padding)]);\
+    \
+    reg_C[2][0] += reg_A[2][0] * reg_B[0][0];\
+    reg_C[2][1] += reg_A[2][0] * reg_B[0][1];\
+    reg_C[2][2] += reg_A[2][0] * reg_B[0][2];\
+    reg_C[2][3] += reg_A[2][0] * reg_B[0][3];\
+    \
+    FLOAT2(reg_A[3][0]) = FLOAT2(A_sh[A_index + 3 * (k + padding)]);\
+    \
+    reg_C[3][0] += reg_A[3][0] * reg_B[0][0];\
+    reg_C[3][1] += reg_A[3][0] * reg_B[0][1];\
+    reg_C[3][2] += reg_A[3][0] * reg_B[0][2];\
+    reg_C[3][3] += reg_A[3][0] * reg_B[0][3];\
+    \
+    FLOAT4(reg_B[1][0]) = FLOAT4(B_sh[B_index + (n + padding)]);\
+    \
+    reg_C[0][0] += reg_A[0][1] * reg_B[1][0];\
+    reg_C[0][1] += reg_A[0][1] * reg_B[1][1];\
+    reg_C[0][2] += reg_A[0][1] * reg_B[1][2];\
+    reg_C[0][3] += reg_A[0][1] * reg_B[1][3];
+
+#define calc_k_fma2()\
+    reg_C[1][0] += reg_A[1][1] * reg_B[1][0];\
+    reg_C[1][1] += reg_A[1][1] * reg_B[1][1];\
+    reg_C[1][2] += reg_A[1][1] * reg_B[1][2];\
+    reg_C[1][3] += reg_A[1][1] * reg_B[1][3];\
+    \
+    FLOAT2(reg_A[0][0]) = FLOAT2(A_sh[A_index + TK]);\
+    \
+    reg_C[2][0] += reg_A[2][1] * reg_B[1][0];\
+    reg_C[2][1] += reg_A[2][1] * reg_B[1][1];\
+    \
+    reg_C[2][2] += reg_A[2][1] * reg_B[1][2];\
+    FLOAT4(reg_B[0][0]) = FLOAT4(B_sh[B_index + TK * (n + padding)]);\
+    reg_C[2][3] += reg_A[2][1] * reg_B[1][3];\
+    \
+    reg_C[3][0] += reg_A[3][1] * reg_B[1][0];\
+    reg_C[3][1] += reg_A[3][1] * reg_B[1][1];\
+    reg_C[3][2] += reg_A[3][1] * reg_B[1][2];\
+    reg_C[3][3] += reg_A[3][1] * reg_B[1][3];
+__global__ void gemm_kernel7_3(float *d_A, float *d_B, float *d_C, int M, int N, int K) {
+    int padding = 4; 
+    // 16 * 16 = 256
+    // m * k = 1024 一个线程读 4 个
+    const int m = 64;
+    const int n = 64;
+    const int k = 16;
+    const int TM = 4;
+    const int TN = 4;
+    const int TK = 2;
+    extern __shared__ float sh[];
+    float *A_sh = sh;
+    float *B_sh = sh + m * (k + padding);
+    int N_tile_index = blockIdx.x; // tile的列号
+    int M_tile_index = blockIdx.y; // tile的行号
+    int A_m_index;
+    int A_n_index;
+    int B_m_index;
+    int B_n_index;
+    int C_m_index = threadIdx.x / ((n + TN - 1) / TN); // tile内的4 * 4行号
+    int C_n_index = threadIdx.x % ((n + TN - 1) / TN); // tile内的4 * 4列号
+    const int A_pre_thread_num = (m * k + blockDim.x - 1)/ blockDim.x;
+    const int B_pre_thread_num = (k * n + blockDim.x - 1)/ blockDim.x;
+    int ix;
+    // printf("m_index: %d, n_index: %d\n", m_index, n_index);
+    float reg_A[TM][TK];
+    float reg_B[TK][TN];
+    float reg_C[TM][TN] = {0.0f};
+    // float total = 0.0f;
+    int K_tile_index = 0;
+    // prefetch7_3();
+    for (; K_tile_index < int((K + k - 1) / k); K_tile_index++) {
+        prefetch7_3();
+	__syncthreads();
+        int A_index = C_m_index * TM * (k + padding);
+        int B_index = C_n_index * TN;
+        FLOAT2(reg_A[0][0]) = FLOAT2(A_sh[A_index]);
+        FLOAT4(reg_B[0][0]) = FLOAT4(B_sh[B_index]);
+        calc_k_fma1();// 0
+        calc_k_fma2();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1();// 2
+        calc_k_fma2();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1();// 4
+        calc_k_fma2();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1();// 6
+        calc_k_fma2();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1();// 8
+        calc_k_fma2();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1();// 10
+        calc_k_fma2();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1();// 12
+        calc_k_fma2();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        // if (K_tile_index + 1 < int((K + k - 1) / k)) {
+        //     ix = threadIdx.x * A_pre_thread_num;
+        //     A_m_index = ix / k;
+        //     A_n_index = ix % k;
+        //     int d_A_index = (M_tile_index * m + A_m_index) * K + (K_tile_index + 1) * k + A_n_index;
+        //     ix = A_m_index * (k + padding) + A_n_index;
+        //     FLOAT4(A_sh[ix]) = FLOAT4(d_A[d_A_index]);
+        // }
+        calc_k_fma1();// 14
+        reg_C[1][0] += reg_A[1][1] * reg_B[1][0];
+        reg_C[1][1] += reg_A[1][1] * reg_B[1][1];
+        reg_C[1][2] += reg_A[1][1] * reg_B[1][2];
+        reg_C[1][3] += reg_A[1][1] * reg_B[1][3];   
+        reg_C[2][0] += reg_A[2][1] * reg_B[1][0];
+        reg_C[2][1] += reg_A[2][1] * reg_B[1][1];
+        // if (K_tile_index + 1 < int((K + k - 1) / k)) {
+        //     ix = threadIdx.x * B_pre_thread_num;
+        //     B_m_index = ix / n;
+        //     B_n_index = ix % n;
+        //     ix = B_m_index * (n + padding) + B_n_index;
+        //     int d_B_index = ((K_tile_index + 1) * k + B_m_index) * N + N_tile_index * n + B_n_index;
+        //     FLOAT4(B_sh[ix]) = FLOAT4(d_B[d_B_index]);
+        // }
+        reg_C[2][2] += reg_A[2][1] * reg_B[1][2];
+        reg_C[2][3] += reg_A[2][1] * reg_B[1][3];
+        reg_C[3][0] += reg_A[3][1] * reg_B[1][0];
+        reg_C[3][1] += reg_A[3][1] * reg_B[1][1];
+        reg_C[3][2] += reg_A[3][1] * reg_B[1][2];
+        reg_C[3][3] += reg_A[3][1] * reg_B[1][3];
+    }
+    int C_index = (M_tile_index * m + C_m_index * TM) * N + N_tile_index * n + C_n_index * TN;
+    FLOAT4(d_C[C_index]) = FLOAT4(reg_C[0][0]);
+    FLOAT4(d_C[C_index + 1 * N]) = FLOAT4(reg_C[1][0]);
+    FLOAT4(d_C[C_index + 2 * N]) = FLOAT4(reg_C[2][0]);
+    FLOAT4(d_C[C_index + 3 * N]) = FLOAT4(reg_C[3][0]);
+    // for (int i = 0; i < TM; i++) {
+    //    int C_index = (M_tile_index * m + C_m_index * TM) * N + N_tile_index * n + C_n_index * TN + i * N;
+    //    FLOAT4(d_C[C_index]) = FLOAT4(reg_C[i][0]);
+    // }
+}
+float test7_3 () {
+    const int m = 64;
+    const int n = 64;
+    const int k = 16;
+    const int TM = 4;
+    const int TN = 4;
+    const int TK = 2;
+    const int padding = 4;
+    // int thread_size = (m * n + reg_size * reg_size - 1) / (reg_size * reg_size);
+    test_start();
+    int thread_size = min(m * n, C_size);
+    dim3 block((M + m - 1) / m, (N + n - 1) / n);
+    dim3 thread((m * n + TM * TN - 1) / (TM * TN));
+    int shared_size = sizeof(float) * (m * (k + padding) + k * (n + padding));
+    gemm_kernel7_3<<<block, thread, shared_size>>>(d_A, d_B, d_C, M, N, K);
+    KernelErrChk();
+    ErrChk(hipEventRecord(start, 0));
+    for (int i = 0; i < iteration; i++) {
+        gemm_kernel7_3<<<block, thread,  shared_size>>>(d_A, d_B, d_C, M, N, K);
+    }
+    test_end();
+    return elapsedTime / iteration;
+}
+
+
+#define prefetch7_4()\
+    global_load<0>(&d_A[d_A_index + K_tile_index * k], readA);\
+    global_load<0>(&d_B[d_B_index + K_tile_index * k * N], readB);\
+    vmcnt<0>();\
+    FLOAT4(A_sh[A_sh_offset + A_m_index * (k + padding) + A_n_index]) = readA;\
+    FLOAT4(B_sh[B_sh_offset + B_m_index * (n + padding) + B_n_index]) = readB;
+#define calc_k_fma1_7_4()\
+    reg_C[0][0] += reg_A[0][0] * reg_B[0][0];\
+    reg_C[0][1] += reg_A[0][0] * reg_B[0][1];\
+    reg_C[0][2] += reg_A[0][0] * reg_B[0][2];\
+    reg_C[0][3] += reg_A[0][0] * reg_B[0][3];\
+    \
+    FLOAT2(reg_A[1][0]) = FLOAT2(A_sh[A_sh_offset + A_index + (k + padding)]);\
+    \
+    reg_C[1][0] += reg_A[1][0] * reg_B[0][0];\
+    reg_C[1][1] += reg_A[1][0] * reg_B[0][1];\
+    reg_C[1][2] += reg_A[1][0] * reg_B[0][2];\
+    reg_C[1][3] += reg_A[1][0] * reg_B[0][3];\
+    \
+    FLOAT2(reg_A[2][0]) = FLOAT2(A_sh[A_sh_offset + A_index + 2 * (k + padding)]);\
+    \
+    reg_C[2][0] += reg_A[2][0] * reg_B[0][0];\
+    reg_C[2][1] += reg_A[2][0] * reg_B[0][1];\
+    reg_C[2][2] += reg_A[2][0] * reg_B[0][2];\
+    reg_C[2][3] += reg_A[2][0] * reg_B[0][3];\
+    \
+    FLOAT2(reg_A[3][0]) = FLOAT2(A_sh[A_sh_offset + A_index + 3 * (k + padding)]);\
+    \
+    reg_C[3][0] += reg_A[3][0] * reg_B[0][0];\
+    reg_C[3][1] += reg_A[3][0] * reg_B[0][1];\
+    reg_C[3][2] += reg_A[3][0] * reg_B[0][2];\
+    reg_C[3][3] += reg_A[3][0] * reg_B[0][3];\
+    \
+    FLOAT4(reg_B[1][0]) = FLOAT4(B_sh[B_sh_offset + B_index + (n + padding)]);\
+    \
+    reg_C[0][0] += reg_A[0][1] * reg_B[1][0];\
+    reg_C[0][1] += reg_A[0][1] * reg_B[1][1];\
+    reg_C[0][2] += reg_A[0][1] * reg_B[1][2];\
+    reg_C[0][3] += reg_A[0][1] * reg_B[1][3];
+
+#define calc_k_fma2_7_4()\
+    reg_C[1][0] += reg_A[1][1] * reg_B[1][0];\
+    reg_C[1][1] += reg_A[1][1] * reg_B[1][1];\
+    reg_C[1][2] += reg_A[1][1] * reg_B[1][2];\
+    reg_C[1][3] += reg_A[1][1] * reg_B[1][3];\
+    \
+    FLOAT2(reg_A[0][0]) = FLOAT2(A_sh[A_sh_offset + A_index + TK]);\
+    \
+    reg_C[2][0] += reg_A[2][1] * reg_B[1][0];\
+    reg_C[2][1] += reg_A[2][1] * reg_B[1][1];\
+    \
+    reg_C[2][2] += reg_A[2][1] * reg_B[1][2];\
+    FLOAT4(reg_B[0][0]) = FLOAT4(B_sh[B_sh_offset + B_index + TK * (n + padding)]);\
+    reg_C[2][3] += reg_A[2][1] * reg_B[1][3];\
+    \
+    reg_C[3][0] += reg_A[3][1] * reg_B[1][0];\
+    reg_C[3][1] += reg_A[3][1] * reg_B[1][1];\
+    reg_C[3][2] += reg_A[3][1] * reg_B[1][2];\
+    reg_C[3][3] += reg_A[3][1] * reg_B[1][3];
+__global__ void gemm_kernel7_4(float *d_A, float *d_B, float *d_C, int M, int N, int K) {
+    int padding = 4; 
+    // 16 * 16 = 256
+    // m * k = 1024 一个线程读 4 个
+    const int m = 64;
+    const int n = 64;
+    const int k = 16;
+    const int TM = 4;
+    const int TN = 4;
+    const int TK = 2;
+    extern __shared__ float sh[];
+    float *A_sh = sh;
+    float *B_sh = sh + 2 * m * (k + padding);
+    int N_tile_index = blockIdx.x; // tile的列号
+    int M_tile_index = blockIdx.y; // tile的行号
+    int A_m_index;
+    int A_n_index;
+    int B_m_index;
+    int B_n_index;
+    int A_sh_offset = 0;
+    int B_sh_offset = 0;
+    int A_sh_size = m * (k + padding);
+    int B_sh_size = k * (n + padding);
+    int C_m_index = threadIdx.x / ((n + TN - 1) / TN); // tile内的4 * 4行号
+    int C_n_index = threadIdx.x % ((n + TN - 1) / TN); // tile内的4 * 4列号
+    const int A_pre_thread_num = (m * k + blockDim.x - 1)/ blockDim.x;
+    const int B_pre_thread_num = (k * n + blockDim.x - 1)/ blockDim.x;
+    int ix;
+    ix = threadIdx.x * A_pre_thread_num;
+    A_m_index = ix / k;
+    A_n_index = ix % k;
+    ix = threadIdx.x * B_pre_thread_num;
+    B_m_index = ix / n;
+    B_n_index = ix % n;
+    const int d_A_index = (M_tile_index * m + A_m_index) * K + A_n_index;
+    const int d_B_index = B_m_index * N + N_tile_index * n + B_n_index;\
+    float4 readA;
+    float4 readB;
+    // printf("m_index: %d, n_index: %d\n", m_index, n_index);
+    float reg_A[TM][TK];
+    float reg_B[TK][TN];
+    float reg_C[TM][TN] = {0.0f};
+    // float total = 0.0f;
+    int K_tile_index = 0;
+    lgkmcnt<0>();
+    global_load<0>(&d_A[d_A_index + K_tile_index * k], readA);
+    global_load<0>(&d_B[d_B_index + K_tile_index * k * N], readB);
+    vmcnt<0>();
+    FLOAT4(A_sh[A_sh_offset + A_m_index * (k + padding) + A_n_index]) = readA;
+    FLOAT4(B_sh[B_sh_offset + B_m_index * (n + padding) + B_n_index]) = readB;
+    do {
+        // prefetch7_4();
+        __syncthreads();
+        if (K_tile_index + 1 < int((K + k - 1) / k)) {
+            global_load<0>(&d_A[d_A_index + (K_tile_index + 1) * k], readA);\
+            global_load<0>(&d_B[d_B_index + (K_tile_index + 1) * k * N], readB);\
+            vmcnt<0>();\
+            FLOAT4(A_sh[A_sh_offset^A_sh_size + A_m_index * (k + padding) + A_n_index]) = readA;\
+            FLOAT4(B_sh[B_sh_offset^B_sh_size + B_m_index * (n + padding) + B_n_index]) = readB;
+        }
+        lgkmcnt<0>();  
+        int A_index = C_m_index * TM * (k + padding);
+        int B_index = C_n_index * TN;
+        FLOAT2(reg_A[0][0]) = FLOAT2(A_sh[A_sh_offset + A_index]);
+        FLOAT4(reg_B[0][0]) = FLOAT4(B_sh[B_sh_offset + B_index]);
+        calc_k_fma1_7_4();// 0
+        calc_k_fma2_7_4();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1_7_4();// 2
+        calc_k_fma2_7_4();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1_7_4();// 4
+        calc_k_fma2_7_4();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1_7_4();// 6
+        calc_k_fma2_7_4();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1_7_4();// 8
+        calc_k_fma2_7_4();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1_7_4();// 10
+        calc_k_fma2_7_4();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1_7_4();// 12
+        calc_k_fma2_7_4();
+        A_index += TK;
+        B_index += TK * (n + padding);
+        calc_k_fma1_7_4();// 14
+        reg_C[1][0] += reg_A[1][1] * reg_B[1][0];
+        reg_C[1][1] += reg_A[1][1] * reg_B[1][1];
+        reg_C[1][2] += reg_A[1][1] * reg_B[1][2];
+        reg_C[1][3] += reg_A[1][1] * reg_B[1][3];   
+        reg_C[2][0] += reg_A[2][1] * reg_B[1][0];
+        reg_C[2][1] += reg_A[2][1] * reg_B[1][1];
+        reg_C[2][2] += reg_A[2][1] * reg_B[1][2];
+        reg_C[2][3] += reg_A[2][1] * reg_B[1][3];
+        reg_C[3][0] += reg_A[3][1] * reg_B[1][0];
+        reg_C[3][1] += reg_A[3][1] * reg_B[1][1];
+        reg_C[3][2] += reg_A[3][1] * reg_B[1][2];
+        reg_C[3][3] += reg_A[3][1] * reg_B[1][3];
+	A_sh_offset ^= A_sh_size;
+	B_sh_offset ^= B_sh_size;
+	K_tile_index++;
+    } while (K_tile_index < int((K + k - 1) / k));
+    int C_index = (M_tile_index * m + C_m_index * TM) * N + N_tile_index * n + C_n_index * TN;
+    FLOAT4(d_C[C_index]) = FLOAT4(reg_C[0][0]);
+    FLOAT4(d_C[C_index + 1 * N]) = FLOAT4(reg_C[1][0]);
+    FLOAT4(d_C[C_index + 2 * N]) = FLOAT4(reg_C[2][0]);
+    FLOAT4(d_C[C_index + 3 * N]) = FLOAT4(reg_C[3][0]);
+    // for (int i = 0; i < TM; i++) {
+    //    int C_index = (M_tile_index * m + C_m_index * TM) * N + N_tile_index * n + C_n_index * TN + i * N;
+    //    FLOAT4(d_C[C_index]) = FLOAT4(reg_C[i][0]);
+    // }
+}
+float test7_4 () {
+    const int m = 64;
+    const int n = 64;
+    const int k = 16;
+    const int TM = 4;
+    const int TN = 4;
+    const int TK = 2;
+    const int padding = 4;
+    // int thread_size = (m * n + reg_size * reg_size - 1) / (reg_size * reg_size);
+    test_start();
+    int thread_size = min(m * n, C_size);
+    dim3 block((M + m - 1) / m, (N + n - 1) / n);
+    dim3 thread((m * n + TM * TN - 1) / (TM * TN));
+    int shared_size = sizeof(float) * (m * (k + padding) + k * (n + padding)) * 2;
+    gemm_kernel7_4<<<block, thread, shared_size>>>(d_A, d_B, d_C, M, N, K);
+    KernelErrChk();
+    ErrChk(hipEventRecord(start, 0));
+    for (int i = 0; i < iteration; i++) {
+        gemm_kernel7_4<<<block, thread,  shared_size>>>(d_A, d_B, d_C, M, N, K);
     }
     test_end();
     return elapsedTime / iteration;

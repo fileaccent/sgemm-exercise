@@ -22,6 +22,7 @@ const int WAVE_SIZE = rocwmma::AMDGCN_WAVE_SIZE;
 #define FETCH_FLOAT4(pointer) (reinterpret_cast<float4*>(&(pointer))[0])
 
 #define FLOAT4(pointer) (reinterpret_cast<float4*>(&(pointer))[0])
+#define FLOAT2(pointer) (reinterpret_cast<float2*>(&(pointer))[0])
 #define ErrChk(code) { Assert((code), __FILE__, __LINE__); }
 static inline void Assert(hipError_t  code, const char *file, int line){
 	if(code!=hipSuccess) {
@@ -122,6 +123,135 @@ static inline void Assert(hipError_t  code, const char *file, int line){
     free(h_B);\
     free(h_C);
 
+__device__ void set_value(float* dst, float* source,const int n) {
+    int i = 0;
+    if (n == 1) {
+       dst[0] = source[0];
+    } else if (n == 2) {
+       FLOAT2(dst[0]) = FLOAT2(source[0]);
+    } else if (n == 4) {
+       FLOAT4(dst[0]) = FLOAT4(source[0]);
+    } else {
+       while (i < n) {
+          if (i + 3 < n) {
+             FLOAT4(dst[i]) = FLOAT4(source[i]);
+	     i += 4;
+          } else if (i + 1 < n) {
+	     FLOAT2(dst[i]) = FLOAT2(source[i]);
+             i += 2;
+          } else if (i < n) {
+             dst[i] = source[i];
+	     i++;
+          }
+       }
+    }
+}
+
+__device__ void set_value_matrix(float* dst, float* source, int dst_m, int dst_n, int dst_lda, int source_lda) {
+    for (int i = 0; i < dst_m; i++) {
+        set_value(&dst[i * dst_lda], &source[i * source_lda], dst_n);
+    }
+}
+template<uint32_t offset>
+inline __device__ void global_load(float* ptr, float4 &val) {
+    if(offset == 0) {
+    asm volatile("\n \
+    global_load_dwordx4 %0, %1, off \n \
+    "
+    :"=v"(val)
+    :"v"(ptr)
+    );
+    return;
+    }
+    if(offset == 8) {
+    asm volatile("\n \
+    global_load_dwordx4 %0, %1, off offset:32 \n \
+    "
+    :"=v"(val)
+    :"v"(ptr));
+    }
+}
+
+
+template<uint32_t cnt>
+inline __device__ void lgkmcnt(){
+  if(cnt == 0) {
+    asm volatile("\n \
+    s_waitcnt lgkmcnt(0) \n \
+    "::);
+  }
+  if(cnt == 1) {
+    asm volatile("\n \
+    s_waitcnt lgkmcnt(1) \n \
+    "::);
+  }
+  if(cnt == 2) {
+    asm volatile("\n \
+    s_waitcnt lgkmcnt(2) \n \
+    "::);
+  }
+  if(cnt == 3) {
+    asm volatile("\n \
+    s_waitcnt lgkmcnt(3) \n \
+    "::);
+  }
+  if(cnt == 4) {
+    asm volatile("\n \
+    s_waitcnt lgkmcnt(4) \n \
+    "::);
+  }
+  if(cnt == 5) {
+    asm volatile("\n \
+    s_waitcnt lgkmcnt(5) \n \
+    "::);
+  }
+  if(cnt == 6) {
+    asm volatile("\n \
+    s_waitcnt lgkmcnt(6) \n \
+    "::);
+  }
+
+/**
+* Disabling as 16 is to high to fit in 4bits (15 max)
+  if(cnt == 16) {
+    asm volatile("\n \
+    s_waitcnt lgkmcnt(16) \n \
+    "::);
+  }
+*/
+}
+
+template<uint32_t cnt>
+inline __device__ void vmcnt() {
+    if(cnt == 0) {
+      asm volatile ("\n \
+      s_waitcnt vmcnt(0) \n \
+      "::);
+    }
+    if(cnt == 1) {
+      asm volatile ("\n \
+      s_waitcnt vmcnt(1) \n \
+      "::);
+    }
+    if(cnt == 2) {
+      asm volatile ("\n \
+      s_waitcnt vmcnt(2) \n \
+      "::);
+    }
+    if(cnt == 4) {
+      asm volatile ("\n \
+      s_waitcnt vmcnt(2) \n \
+      "::);
+    }
+}
+inline __device__ void fma_op(float &a, float &b, float &c) {
+    asm volatile("\n \
+          v_fma_f32 %0, %1, %2, %0  \n \
+          "
+          :
+          :"v"(c), "v"(a), "v"(b)
+          );
+}
 float rocblas_result() {
     test_start();
     int thread_size = 32;
@@ -234,6 +364,21 @@ int main () {
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
     cout << "test7_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
     preTime = nowTime;
+    // 7.1 调整参数
+    nowTime = test7_2();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test7_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
+    // 7.3
+    nowTime = test7_3();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test7_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
+    // 7.4
+    nowTime = test7_4();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test7_4: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
     // 8. 分为 warp 块执行, 无效果
     nowTime = test8();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
@@ -275,6 +420,22 @@ int main () {
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
     cout << "test9: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
     preTime = nowTime;
+    // 9.1
+    nowTime = test9_1();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test9_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
+    // 9.2
+    nowTime = test9_2();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test9_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
+    // 9.3
+    nowTime = test9_3();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test9_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
+
     // // 10.1  
     // nowTime = test10_1();
     // Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
