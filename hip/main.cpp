@@ -6,11 +6,11 @@
 #include <rocblas.h>
 #include <rocwmma/rocwmma.hpp>
 using namespace std;
-#define iteration 1
+#define iteration 10
 const int reg_size = 2;
-int M = 1 << 14;
-int K = 1 << 14;
-int N = 1 << 14;
+int M = 1 << 12;
+int K = 1 << 12;
+int N = 1 << 12;
 const int  m = 16;
 const int  n = 16;
 const int  k = 16;
@@ -394,6 +394,11 @@ int main () {
     nowTime = test7_6();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
     cout << "test7_6: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
+    //7.7
+    nowTime = test7_7();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test7_7: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
     preTime = nowTime;
     // 8. 分为 warp 块执行, 无效果
     nowTime = test8();

@@ -824,3 +824,145 @@ float test7_6 () {
     test_end();
     return elapsedTime / iteration;
 }
+#define calc_k_fma1_7_7()\
+    reg_C[0][0] += A_sh[A_sh_offset + A_index] * B_sh[B_sh_offset + B_index];\
+    reg_C[0][1] += A_sh[A_sh_offset + A_index] * B_sh[B_sh_offset + B_index + 1];\
+    reg_C[0][2] += A_sh[A_sh_offset + A_index] * B_sh[B_sh_offset + B_index + 2];\
+    reg_C[0][3] += A_sh[A_sh_offset + A_index] * B_sh[B_sh_offset + B_index + 3];\
+    \
+    reg_C[1][0] += A_sh[A_sh_offset + A_index + (k + padding)] * B_sh[B_sh_offset + B_index];\
+    reg_C[1][1] += A_sh[A_sh_offset + A_index + (k + padding)] * B_sh[B_sh_offset + B_index + 1];\
+    reg_C[1][2] += A_sh[A_sh_offset + A_index + (k + padding)] * B_sh[B_sh_offset + B_index + 2];\
+    reg_C[1][3] += A_sh[A_sh_offset + A_index + (k + padding)] * B_sh[B_sh_offset + B_index + 3];\
+    \
+    reg_C[2][0] += A_sh[A_sh_offset + A_index + 2 * (k + padding)] * B_sh[B_sh_offset + B_index];\
+    reg_C[2][1] += A_sh[A_sh_offset + A_index + 2 * (k + padding)] * B_sh[B_sh_offset + B_index + 1];\
+    reg_C[2][2] += A_sh[A_sh_offset + A_index + 2 * (k + padding)] * B_sh[B_sh_offset + B_index + 2];\
+    reg_C[2][3] += A_sh[A_sh_offset + A_index + 2 * (k + padding)] * B_sh[B_sh_offset + B_index + 3];\
+    \
+    reg_C[3][0] += A_sh[A_sh_offset + A_index + 3 * (k + padding)] * B_sh[B_sh_offset + B_index];\
+    reg_C[3][1] += A_sh[A_sh_offset + A_index + 3 * (k + padding)] * B_sh[B_sh_offset + B_index + 1];\
+    reg_C[3][2] += A_sh[A_sh_offset + A_index + 3 * (k + padding)] * B_sh[B_sh_offset + B_index + 2];\
+    reg_C[3][3] += A_sh[A_sh_offset + A_index + 3 * (k + padding)] * B_sh[B_sh_offset + B_index + 3];\
+    \
+    reg_C[0][0] += A_sh[A_sh_offset + A_index + 1] * B_sh[B_sh_offset + B_index + (n + padding)];\
+    reg_C[0][1] += A_sh[A_sh_offset + A_index + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 1];\
+    reg_C[0][2] += A_sh[A_sh_offset + A_index + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 2];\
+    reg_C[0][3] += A_sh[A_sh_offset + A_index + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 3];
+#define calc_k_fma2_7_7()\
+    reg_C[1][0] += A_sh[A_sh_offset + A_index + (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding)];\
+    reg_C[1][1] += A_sh[A_sh_offset + A_index + (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 1];\
+    reg_C[1][2] += A_sh[A_sh_offset + A_index + (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 2];\
+    reg_C[1][3] += A_sh[A_sh_offset + A_index + (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 3];\
+    \
+    reg_C[2][0] += A_sh[A_sh_offset + A_index + 2 * (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding)];\
+    reg_C[2][1] += A_sh[A_sh_offset + A_index + 2 * (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 1];\
+    reg_C[2][2] += A_sh[A_sh_offset + A_index + 2 * (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 2];\
+    reg_C[2][3] += A_sh[A_sh_offset + A_index + 2 * (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 3];\
+    \
+    reg_C[3][0] += A_sh[A_sh_offset + A_index + 3 * (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding)];\
+    reg_C[3][1] += A_sh[A_sh_offset + A_index + 3 * (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 1];\
+    reg_C[3][2] += A_sh[A_sh_offset + A_index + 3 * (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 2];\
+    reg_C[3][3] += A_sh[A_sh_offset + A_index + 3 * (k + padding) + 1] * B_sh[B_sh_offset + B_index + (n + padding) + 3];
+__global__ void gemm_kernel7_7(float *d_A, float *d_B, float *d_C, int M, int N, int K) {
+    // 16 * 16 = 256
+    // m * k = 1024 一个线程读 4 个
+    const int m = 64;
+    const int n = 64;
+    const int k = 16;
+    const int TM = 4;
+    const int TN = 4;
+    const int TK = 2;
+    extern __shared__ __align__(16 * 1024) float sh[];
+    const int padding = 4; 
+    float *A_sh = sh;
+    float *B_sh = sh + 2 * m * (k + padding);
+    const int N_tile_index = blockIdx.x; // tile的列号
+    const int M_tile_index = blockIdx.y; // tile的行号
+    const int idx = threadIdx.x;
+    const int A_m_index = idx >> 2;
+    const int A_n_index = (idx & 3) << 2;
+    const int B_m_index = idx >> 4;
+    const int B_n_index = (idx & 15) << 2;
+    const int warp_id = idx / WAVE_SIZE;
+    const int warp_id_m = warp_id / 1; // 4 * 1 的格子
+    const int warp_id_n = warp_id % 1;
+    const int lane_id = idx % WAVE_SIZE;
+    const int lane_id_m = lane_id / 16; // 4 * 16 的块
+    const int lane_id_n = lane_id % 16;
+    const int C_m_index = warp_id_m * 4 + lane_id_m; // tile内的4 * 4行号
+    const int C_n_index = warp_id_n * 16 + lane_id_n; // tile内的4 * 4列号
+    // const int C_m_index = idx >> 4; // tile内的4 * 4行号
+    // const int C_n_index = idx & 15; // tile内的4 * 4列号
+    const int A_pre_thread_num = (m * k + blockDim.x - 1)/ blockDim.x;
+    const int B_pre_thread_num = (k * n + blockDim.x - 1)/ blockDim.x;
+    const int d_A_index = (M_tile_index * m + A_m_index) * K + A_n_index;
+    const int d_B_index = (B_m_index) * N + N_tile_index * n + B_n_index;
+    // printf("m_index: %d, n_index: %d\n", m_index, n_index);
+    float reg_A[TM][TK];
+    float reg_B[TK][TN];
+    float reg_C[TM][TN] = {0.0f};
+    int A_sh_offset = 0;
+    int B_sh_offset = 0;
+    const int A_sh_size = m * (k + padding);
+    const int B_sh_size = k * (n + padding);
+    int K_tile_index = 0;
+    float4 readA;
+    float4 readB;
+    if (threadIdx.y == 0) {
+       FLOAT4(A_sh[A_sh_offset + A_m_index * (k + padding) + A_n_index]) = FLOAT4(d_A[d_A_index + K_tile_index * k]);
+       FLOAT4(B_sh[B_sh_offset + B_m_index * (n + padding) + B_n_index]) = FLOAT4(d_B[d_B_index + K_tile_index * k * N]);
+    }
+    do {
+        __syncthreads();
+        if (threadIdx.y == 1) {
+            if (K_tile_index + 1 < int((K + k - 1) / k)) {
+                FLOAT4(A_sh[(A_sh_offset^A_sh_size) + A_m_index * (k + padding) + A_n_index]) = FLOAT4(d_A[d_A_index + (K_tile_index + 1) * k]);
+                FLOAT4(B_sh[(B_sh_offset^B_sh_size) + B_m_index * (n + padding) + B_n_index]) = FLOAT4(d_B[d_B_index + (K_tile_index + 1) * k * N]);
+            }
+        }
+        if (threadIdx.y == 0) {
+            int A_index = C_m_index * TM * (k + padding);
+            int B_index = C_n_index * TN;
+            for (int k_reg_index = 0; k_reg_index < k; k_reg_index += TK) {
+                calc_k_fma1_7_4();
+                calc_k_fma2_7_4();
+                A_index += TK;
+                B_index += TK * (n + padding);
+            }
+        }
+        A_sh_offset ^= A_sh_size;
+        B_sh_offset ^= B_sh_size;
+        K_tile_index++;
+    } while (K_tile_index < int((K + k - 1) / k));
+    if (threadIdx.y == 0) {
+        const int C_index = (M_tile_index * m + C_m_index * TM) * N + N_tile_index * n + C_n_index * TN;
+        FLOAT4(d_C[C_index]) = FLOAT4(reg_C[0][0]);
+        FLOAT4(d_C[C_index + 1 * N]) = FLOAT4(reg_C[1][0]);
+        FLOAT4(d_C[C_index + 2 * N]) = FLOAT4(reg_C[2][0]);
+        FLOAT4(d_C[C_index + 3 * N]) = FLOAT4(reg_C[3][0]);
+    }
+}
+float test7_7 () {
+    const int m = 64;
+    const int n = 64;
+    const int k = 16;
+    const int TM = 4;
+    const int TN = 4;
+    const int TK = 2;
+    const int padding = 4;
+    // int thread_size = (m * n + reg_size * reg_size - 1) / (reg_size * reg_size);
+    test_start();
+    int thread_size = min(m * n, C_size);
+    dim3 block((M + m - 1) / m, (N + n - 1) / n);
+    dim3 thread((m * n + TM * TN - 1) / (TM * TN), 2);
+    int shared_size = sizeof(float) * (m * (k + padding) + k * (n + padding)) * 2;
+    gemm_kernel7_7<<<block, thread, shared_size>>>(d_A, d_B, d_C, M, N, K);
+    KernelErrChk();
+    ErrChk(hipEventRecord(start, 0));
+    for (int i = 0; i < iteration; i++) {
+        gemm_kernel7_7<<<block, thread,  shared_size>>>(d_A, d_B, d_C, M, N, K);
+    }
+    test_end();
+    return elapsedTime / iteration;
+}
