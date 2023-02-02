@@ -8,9 +8,9 @@
 using namespace std;
 #define iteration 1
 const int reg_size = 2;
-int M = 1 << 10;
-int K = 1 << 10;
-int N = 1 << 10;
+int M = 1 << 14;
+int K = 1 << 14;
+int N = 1 << 14;
 const int  m = 16;
 const int  n = 16;
 const int  k = 16;
@@ -73,10 +73,10 @@ static inline void Assert(hipError_t  code, const char *file, int line){
     h_C = (float *) malloc(C_bytes); \
     test_C = (float *) malloc(C_bytes); \
     for (int i = 0; i < A_size; i++) { \
-        h_A[i] = rand() % 5; \
+        h_A[i] = 1; \
     } \
     for (int i = 0; i < B_size; i++) { \
-        h_B[i] = rand() % 5; \
+        h_B[i] = 1; \
     } \
     float * d_A; \
     float * d_B; \
@@ -113,6 +113,7 @@ static inline void Assert(hipError_t  code, const char *file, int line){
             isSame = false;\
             break;\
         }\
+	test_C[i] = h_C[i] = 0;\
     }*/\
     ErrChk(hipFree(d_A));\
     ErrChk(hipFree(d_B));\
@@ -354,6 +355,11 @@ int main () {
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
     cout << "test6: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
     preTime = nowTime;
+    // 6.2 
+    nowTime = test6_2();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test6_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
     // 7. 调整寄存器计算时的块
     nowTime = test7();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
@@ -378,6 +384,16 @@ int main () {
     nowTime = test7_4();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
     cout << "test7_4: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
+    // 7.5
+    nowTime = test7_5();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test7_5: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
+    // 7.6
+    nowTime = test7_6();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test7_6: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
     preTime = nowTime;
     // 8. 分为 warp 块执行, 无效果
     nowTime = test8();
@@ -449,4 +465,3 @@ int main () {
 
     return 0;
 }
-

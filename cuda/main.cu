@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 #include <omp.h>
 #include <cublas_v2.h>
+#include <cuda/barrier>
 using namespace std;
 #define iteration 1
 const int reg_size = 2;
