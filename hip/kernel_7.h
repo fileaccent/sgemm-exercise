@@ -1,59 +1,41 @@
-#define prefetch7()\
-    ix = A_m_index * (k + padding) + A_n_index;\
-    FLOAT4(A_sh[ix]) = FLOAT4(d_A[d_A_index + K_tile_index * k]);\
-    ix = B_m_index * (n + padding) + B_n_index;\
-    FLOAT4(B_sh[ix]) = FLOAT4(d_B[d_B_index + K_tile_index * k * N]);
-__global__ void gemm_kernel7(float *d_A, float *d_B, float *d_C, int M, int N, int K, int m, int n, int k) {
-    int padding = 4; 
+__global__ void gemm_kernel7(float *d_A, float *d_B, float *d_C, int M, int N, int K) {
+    const int padding = 4; 
     // 16 * 16 = 256
     // m * k = 1024 一个线程读 4 个
-    // m = 64;
-    // n = 64;
-    // k = 16;
+    const int m = 64;
+    const int n = 64;
+    const int k = 16;
     const int TM = 4;
     const int TN = 4;
     const int TK = 2;
-    extern __shared__ float sh[];
-    float *A_sh = sh;
-    float *B_sh = sh + m * (k + padding);
-    int N_tile_index = blockIdx.x; // tile的列号
-    int M_tile_index = blockIdx.y; // tile的行号
-    int A_m_index;
-    int A_n_index;
-    int B_m_index;
-    int B_n_index;
-    int C_m_index = threadIdx.x / ((n + TN - 1) / TN); // tile内的4 * 4行号
-    int C_n_index = threadIdx.x % ((n + TN - 1) / TN); // tile内的4 * 4列号
-    int A_pre_thread_num;
-    int B_pre_thread_num;
-    int ix;
-    A_pre_thread_num = (m * k + blockDim.x - 1)/ blockDim.x;
-    ix = threadIdx.x * A_pre_thread_num;
-    A_m_index = ix / k;
-    A_n_index = ix % k;
-    B_pre_thread_num = (k * n + blockDim.x - 1) / blockDim.x;
-    ix = threadIdx.x * B_pre_thread_num;
-    B_m_index = ix / n;
-    B_n_index = ix % n;
-    const int d_A_index = (M_tile_index * m + A_m_index) * K + A_n_index;
-    const int d_B_index = (B_m_index) * N + N_tile_index * n + B_n_index;
-
+    __shared__ float A_sh[m][k + padding];
+    __shared__ float B_sh[k][n + padding];
+    const int N_tile_index = blockIdx.y; // tile的列号
+    const int M_tile_index = blockIdx.x; // tile的行号
+    const int idx = threadIdx.x;
+    const int A_m_index = idx >> 2;
+    const int A_n_index = (idx & 3) << 2;
+    const int B_m_index = idx >> 4;
+    const int B_n_index = (idx & 15) << 2;
+    const int C_m_index = idx >> 4; // tile内的4 * 4行号
+    const int C_n_index = idx & 15; // tile内的4 * 4列号
+    // printf("m_index: %d, n_index: %d\n", m_index, n_index);
     float reg_A[TM][TK];
     float reg_B[TK][TN];
     float reg_C[TM][TN] = {0.0f};
-    // float total = 0.0f;
+    const int d_A_index = (M_tile_index * m + A_m_index) * K + A_n_index;
+    const int d_B_index = (B_m_index) * N + N_tile_index * n + B_n_index;
+    
     for (int K_tile_index = 0; K_tile_index < int((K + k - 1) / k); K_tile_index++) {
-        prefetch7();
-	    __syncthreads();
+        FLOAT4(A_sh[A_m_index][A_n_index]) = FLOAT4(d_A[d_A_index + K_tile_index * k]);
+        FLOAT4(B_sh[B_m_index][B_n_index]) = FLOAT4(d_B[d_B_index + K_tile_index * k * N]);
+        __syncthreads();
         for (int k_reg_index = 0; k_reg_index < k; k_reg_index+= TK) {
             for (int i = 0; i < TM; i++) {
-                int A_index = C_m_index * TM * (k + padding) + k_reg_index +  i * (k + padding);
-                reg_A[i][0] = A_sh[A_index];
-                reg_A[i][1] = A_sh[A_index + 1];
+                FLOAT2(reg_A[i][0]) = FLOAT2(A_sh[C_m_index * TM + i][k_reg_index]);
             }
             for (int i = 0; i < TK; i++) {
-                int B_index = k_reg_index * (n + padding) + C_n_index * TN + i * (n + padding);
-                FLOAT4(reg_B[i][0]) = FLOAT4(B_sh[B_index]);
+                FLOAT4(reg_B[i][0]) = FLOAT4(B_sh[k_reg_index + i][C_n_index * TN]);
             }
             for (int i = 0; i < TM; i++) {
                 for (int j = 0; j < TN; j++) {
@@ -63,12 +45,12 @@ __global__ void gemm_kernel7(float *d_A, float *d_B, float *d_C, int M, int N, i
                 }
             }
         }
-         __syncthreads();
+        __syncthreads();
     }
 
     for (int i = 0; i < TM; i++) {
-       int C_index = (M_tile_index * m + C_m_index * TM) * N + N_tile_index * n + C_n_index * TN + i * N;
-       FLOAT4(d_C[C_index]) = FLOAT4(reg_C[i][0]);
+        int C_index = (M_tile_index * m + C_m_index * TM) * N + N_tile_index * n + C_n_index * TN + i * N;
+        FLOAT4(d_C[C_index]) = FLOAT4(reg_C[i][0]);
     }
 }
 float test7 () {
@@ -77,7 +59,6 @@ float test7 () {
     const int k = 16;
     const int TM = 4;
     const int TN = 4;
-    const int TK = 2;
     const int padding = 4;
     // int thread_size = (m * n + reg_size * reg_size - 1) / (reg_size * reg_size);
     test_start();
@@ -85,16 +66,15 @@ float test7 () {
     dim3 block((M + m - 1) / m, (N + n - 1) / n);
     dim3 thread((m * n + TM * TN - 1) / (TM * TN));
     int shared_size = sizeof(float) * (m * (k + padding) + k * (n + padding));
-    gemm_kernel7<<<block, thread, shared_size>>>(d_A, d_B, d_C, M, N, K, m, n, k);
+    gemm_kernel7<<<block, thread, shared_size>>>(d_A, d_B, d_C, M, N, K);
     KernelErrChk();
     ErrChk(hipEventRecord(start, 0));
     for (int i = 0; i < iteration; i++) {
-        gemm_kernel7<<<block, thread,  shared_size>>>(d_A, d_B, d_C, M, N, K, m, n, k);
+        gemm_kernel7<<<block, thread,  shared_size>>>(d_A, d_B, d_C, M, N, K);
     }
     test_end();
     return elapsedTime / iteration;
 }
-
 #define prefetch7_1()\
     pre_thread_num = (m * k + blockDim.x - 1)/ blockDim.x;\
     ix = threadIdx.x * pre_thread_num;\
@@ -259,10 +239,6 @@ __global__ void gemm_kernel7_2(float *d_A, float *d_B, float *d_C, int M, int N,
     
     int C_index = (M_tile_index * m + C_m_index * TM) * N + N_tile_index * n + C_n_index * TN;
     set_value_matrix(&d_C[C_index], (float *)reg_C[0], TM, TN, N, TN);
-    // for (int i = 0; i < TM; i++) {
-    //    int C_index = (M_tile_index * m + C_m_index * TM) * N + N_tile_index * n + C_n_index * TN + i * N;
-    //    set_value(&d_C[C_index], reg_C[i], TN);
-    // }
 }
 float test7_2 () {
     const int m = 64;
@@ -287,19 +263,19 @@ float test7_2 () {
     return elapsedTime / iteration;
 }
 
-#define prefetch7_3()\
-    ix = threadIdx.x * A_pre_thread_num;\
-    A_m_index = ix / k;\
-    A_n_index = ix % k;\
-    int d_A_index = (M_tile_index * m + A_m_index) * K + K_tile_index * k + A_n_index;\
-    ix = A_m_index * (k + padding) + A_n_index;\
-    FLOAT4(A_sh[ix]) = FLOAT4(d_A[d_A_index]);\
-    ix = threadIdx.x * B_pre_thread_num;\
-    B_m_index = ix / n;\
-    B_n_index = ix % n;\
-    ix = B_m_index * (n + padding) + B_n_index;\
-    int d_B_index = (K_tile_index * k + B_m_index) * N + N_tile_index * n + B_n_index;\
-    FLOAT4(B_sh[ix]) = FLOAT4(d_B[d_B_index]);
+// #define prefetch7_3()\
+//     ix = threadIdx.x * A_pre_thread_num;\
+//     A_m_index = ix / k;\
+//     A_n_index = ix % k;\
+//     int d_A_index = (M_tile_index * m + A_m_index) * K + K_tile_index * k + A_n_index;\
+//     ix = A_m_index * (k + padding) + A_n_index;\
+//     FLOAT4(A_sh[ix]) = FLOAT4(d_A[d_A_index]);\
+//     ix = threadIdx.x * B_pre_thread_num;\
+//     B_m_index = ix / n;\
+//     B_n_index = ix % n;\
+//     ix = B_m_index * (n + padding) + B_n_index;\
+//     int d_B_index = (K_tile_index * k + B_m_index) * N + N_tile_index * n + B_n_index;\
+//     FLOAT4(B_sh[ix]) = FLOAT4(d_B[d_B_index]);
 
 #define calc_k_fma1()\
     reg_C[0][0] += reg_A[0][0] * reg_B[0][0];\
@@ -354,8 +330,7 @@ float test7_2 () {
     reg_C[3][1] += reg_A[3][1] * reg_B[1][1];\
     reg_C[3][2] += reg_A[3][1] * reg_B[1][2];\
     reg_C[3][3] += reg_A[3][1] * reg_B[1][3];
-__global__ void gemm_kernel7_3(float *d_A, float *d_B, float *d_C, int M, int N, int K) {
-    int padding = 4; 
+__global__ void gemm_kernel7_3(float *d_A, float *d_B, float *d_C, int M, int N, int K) { 
     // 16 * 16 = 256
     // m * k = 1024 一个线程读 4 个
     const int m = 64;
@@ -364,30 +339,33 @@ __global__ void gemm_kernel7_3(float *d_A, float *d_B, float *d_C, int M, int N,
     const int TM = 4;
     const int TN = 4;
     const int TK = 2;
-    extern __shared__ float sh[];
+    const int padding = 4;
+    extern __shared__ float sh[]; 
     float *A_sh = sh;
     float *B_sh = sh + m * (k + padding);
-    int N_tile_index = blockIdx.x; // tile的列号
-    int M_tile_index = blockIdx.y; // tile的行号
-    int A_m_index;
-    int A_n_index;
-    int B_m_index;
-    int B_n_index;
-    int C_m_index = threadIdx.x / ((n + TN - 1) / TN); // tile内的4 * 4行号
-    int C_n_index = threadIdx.x % ((n + TN - 1) / TN); // tile内的4 * 4列号
-    const int A_pre_thread_num = (m * k + blockDim.x - 1)/ blockDim.x;
-    const int B_pre_thread_num = (k * n + blockDim.x - 1)/ blockDim.x;
-    int ix;
+    const int N_tile_index = blockIdx.x; // tile的列号
+    const int M_tile_index = blockIdx.y; // tile的行号
+    const int idx = threadIdx.x;
+    const int A_m_index = idx >> 2;
+    const int A_n_index = (idx & 3) << 2;
+    const int B_m_index = idx >> 4;
+    const int B_n_index = (idx & 15) << 2;
+    const int C_m_index = idx >> 4; // tile内的4 * 4行号
+    const int C_n_index = idx & 15; // tile内的4 * 4列号
+    const int A_pre_thread_num = 4;
+    const int B_pre_thread_num = 4;
+    const int d_A_index = (M_tile_index * m + A_m_index) * K + A_n_index;
+    const int d_B_index = (B_m_index) * N + N_tile_index * n + B_n_index;
     // printf("m_index: %d, n_index: %d\n", m_index, n_index);
     float reg_A[TM][TK];
     float reg_B[TK][TN];
     float reg_C[TM][TN] = {0.0f};
-    // float total = 0.0f;
     int K_tile_index = 0;
     // prefetch7_3();
     for (; K_tile_index < int((K + k - 1) / k); K_tile_index++) {
-        prefetch7_3();
-	    __syncthreads();
+        FLOAT4(A_sh[A_m_index * (k + padding) + A_n_index]) = FLOAT4(d_A[d_A_index + K_tile_index * k]);
+        FLOAT4(B_sh[B_m_index * (n + padding) + B_n_index]) = FLOAT4(d_B[d_B_index + K_tile_index * k * N]);
+	__syncthreads();
         int A_index = C_m_index * TM * (k + padding);
         int B_index = C_n_index * TN;
         FLOAT2(reg_A[0][0]) = FLOAT2(A_sh[A_index]);
@@ -434,7 +412,7 @@ __global__ void gemm_kernel7_3(float *d_A, float *d_B, float *d_C, int M, int N,
         reg_C[3][1] += reg_A[3][1] * reg_B[1][1];
         reg_C[3][2] += reg_A[3][1] * reg_B[1][2];
         reg_C[3][3] += reg_A[3][1] * reg_B[1][3];
-	__syncthreads();
+	    __syncthreads();
 
     }
     int C_index = (M_tile_index * m + C_m_index * TM) * N + N_tile_index * n + C_n_index * TN;
@@ -747,7 +725,7 @@ __global__ void gemm_kernel7_6(float *d_A, float *d_B, float *d_C, int M, int N,
     const int k = 16;
     const int TM = 4;
     const int TN = 4;
-    const int TK = 2;
+    const int TK = 4;
     __shared__ float A_sh[2][m][k + padding];
     __shared__ float B_sh[2][k][n + padding];
     const int N_tile_index = blockIdx.y; // tile的列号
@@ -778,7 +756,7 @@ __global__ void gemm_kernel7_6(float *d_A, float *d_B, float *d_C, int M, int N,
         if (threadIdx.y == 0) {
             for (int k_reg_index = 0; k_reg_index < k; k_reg_index+= TK) {
                 for (int i = 0; i < TM; i++) {
-                    FLOAT2(reg_A[i][0]) = FLOAT2(A_sh[sh_offset][C_m_index * TM + i][k_reg_index]);
+                    FLOAT4(reg_A[i][0]) = FLOAT4(A_sh[sh_offset][C_m_index * TM + i][k_reg_index]);
                 }
                 for (int i = 0; i < TK; i++) {
                     FLOAT4(reg_B[i][0]) = FLOAT4(B_sh[sh_offset][k_reg_index + i][C_n_index * TN]);
@@ -894,8 +872,6 @@ __global__ void gemm_kernel7_7(float *d_A, float *d_B, float *d_C, int M, int N,
     const int C_n_index = warp_id_n * 16 + lane_id_n; // tile内的4 * 4列号
     // const int C_m_index = idx >> 4; // tile内的4 * 4行号
     // const int C_n_index = idx & 15; // tile内的4 * 4列号
-    const int A_pre_thread_num = (m * k + blockDim.x - 1)/ blockDim.x;
-    const int B_pre_thread_num = (k * n + blockDim.x - 1)/ blockDim.x;
     const int d_A_index = (M_tile_index * m + A_m_index) * K + A_n_index;
     const int d_B_index = (B_m_index) * N + N_tile_index * n + B_n_index;
     // printf("m_index: %d, n_index: %d\n", m_index, n_index);
@@ -924,12 +900,37 @@ __global__ void gemm_kernel7_7(float *d_A, float *d_B, float *d_C, int M, int N,
         if (threadIdx.y == 0) {
             int A_index = C_m_index * TM * (k + padding);
             int B_index = C_n_index * TN;
-            for (int k_reg_index = 0; k_reg_index < k; k_reg_index += TK) {
-                calc_k_fma1_7_4();
-                calc_k_fma2_7_4();
-                A_index += TK;
-                B_index += TK * (n + padding);
-            }
+            calc_k_fma1_7_7();// 0
+            calc_k_fma2_7_7();
+            A_index += TK;
+            B_index += TK * (n + padding);
+            calc_k_fma1_7_7();// 2
+            calc_k_fma2_7_7();
+            A_index += TK;
+            B_index += TK * (n + padding);
+            calc_k_fma1_7_7();// 4
+            calc_k_fma2_7_7();
+            A_index += TK;
+            B_index += TK * (n + padding);
+            calc_k_fma1_7_7();// 6
+            calc_k_fma2_7_7();
+            A_index += TK;
+            B_index += TK * (n + padding);
+            calc_k_fma1_7_7();// 8
+            calc_k_fma2_7_7();
+            A_index += TK;
+            B_index += TK * (n + padding);
+            calc_k_fma1_7_7();// 10
+            calc_k_fma2_7_7();
+            A_index += TK;
+            B_index += TK * (n + padding);
+            calc_k_fma1_7_7();// 12
+            calc_k_fma2_7_7();
+            A_index += TK;
+            B_index += TK * (n + padding);
+            calc_k_fma1_7_7();// 14
+            calc_k_fma2_7_7();
+            
         }
         A_sh_offset ^= A_sh_size;
         B_sh_offset ^= B_sh_size;
@@ -966,3 +967,4 @@ float test7_7 () {
     test_end();
     return elapsedTime / iteration;
 }
+

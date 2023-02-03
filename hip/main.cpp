@@ -6,10 +6,10 @@
 #include <rocblas.h>
 #include <rocwmma/rocwmma.hpp>
 using namespace std;
-#define iteration 10
+#define iteration 100
 const int reg_size = 2;
 int M = 1 << 12;
-int K = 1 << 12;
+int K = 1 << 6;
 int N = 1 << 12;
 const int  m = 16;
 const int  n = 16;
@@ -73,10 +73,10 @@ static inline void Assert(hipError_t  code, const char *file, int line){
     h_C = (float *) malloc(C_bytes); \
     test_C = (float *) malloc(C_bytes); \
     for (int i = 0; i < A_size; i++) { \
-        h_A[i] = 1; \
+        h_A[i] = rand() % 5 * 0.2; \
     } \
     for (int i = 0; i < B_size; i++) { \
-        h_B[i] = 1; \
+        h_B[i] = rand() % 7 * 0.3; \
     } \
     float * d_A; \
     float * d_B; \
@@ -99,7 +99,7 @@ static inline void Assert(hipError_t  code, const char *file, int line){
     ErrChk(hipMemcpy(h_C, d_C, C_bytes, hipMemcpyDeviceToHost));\
     /*for (int i = 0; i < M; i++) {\
         for (int j = 0; j < N; j++) {\
-            int total = 0;\
+            float total = 0;\
             for (int k = 0; k < K; k++) {\
                 total += h_A[i * K + k] * h_B[k * N + j];\
             }\
@@ -153,6 +153,53 @@ __device__ void set_value_matrix(float* dst, float* source, int dst_m, int dst_n
         set_value(&dst[i * dst_lda], &source[i * source_lda], dst_n);
     }
 }
+
+__device__ void add_value(float* dst, float* source,const int n) {
+    int i = 0;
+    if (n == 1) {
+      dst[0] += source[0];
+    } else if (n == 2) {
+      float2 mid = FLOAT2(dst[0]);
+      mid.x += source[0];
+      mid.y += source[1];
+      FLOAT2(dst[0]) = mid;
+    } else if (n == 4) {
+      float4 mid = FLOAT4(dst[0]);
+      mid.x += source[0];
+      mid.y += source[1];
+      mid.z += source[2];
+      mid.w += source[3];
+      FLOAT4(dst[0]) = mid;
+    } else {
+      while (i < n) {
+        if (i + 3 < n) {
+          float4 mid = FLOAT4(dst[i]);
+          mid.x += source[i];
+          mid.y += source[i + 1];
+          mid.z += source[i + 2];
+          mid.w += source[i + 3];
+          FLOAT4(dst[i]) = mid;
+          i += 4;
+        } else if (i + 1 < n) {
+          float2 mid = FLOAT2(dst[i]);
+          mid.x += source[i];
+          mid.y += source[i + 1];
+          FLOAT2(dst[i]) = mid;
+          i += 2;
+        } else if (i < n) {
+          dst[i] += source[i];
+          i++;
+        }
+      }
+    }
+}
+
+__device__ void add_value_matrix(float* dst, float* source, int dst_m, int dst_n, int dst_lda, int source_lda) {
+    for (int i = 0; i < dst_m; i++) {
+        add_value(&dst[i * dst_lda], &source[i * source_lda], dst_n);
+    }
+}
+
 template<uint32_t offset>
 inline __device__ void global_load(float* ptr, float4 &val) {
     if(offset == 0) {
@@ -280,6 +327,7 @@ float rocblas_result() {
 #include"kernel_7.h"
 #include"kernel_8.h"
 #include"kernel_9.h"
+#include"kernel_10.h"
 
 int main () {
     float baseTime;
@@ -457,16 +505,16 @@ int main () {
     cout << "test9_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
     preTime = nowTime;
 
-    // // 10.1  
-    // nowTime = test10_1();
-    // Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    // cout << "test10_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", Glops: " << Tflops << endl;
-    // preTime = nowTime;
-    // // 10.2
-    // nowTime = test10_2();
-    // Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    // cout << "test10_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", Glops: " << Tflops << endl;
-    // preTime = nowTime;
+    // 10
+    nowTime = test10();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test10: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
+    // 10.1
+    nowTime = test10_1();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test10_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
 
     return 0;
 }
