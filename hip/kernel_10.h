@@ -103,3 +103,72 @@ float test10 () {
     return elapsedTime / iteration;
 }
 
+
+__global__ void gemm_kernel10_1(float *d_A, float *d_B, float *d_C, int M, int N, int K) {
+    const int padding = 4;
+    const int BM = 64;
+    const int BN = 64;
+    const int TM = 64;
+    const int TN = 1;
+    const int idx = threadIdx.x; // 64
+    const int N_tile_index = blockIdx.y; // tile的行号
+    const int M_tile_index = blockIdx.x; // tile的行号
+    const int matrix_A_base_offset = blockIdx.y * TM * K;
+    const int matrix_B_base_offset = blockIdx.x * TM * N;
+    float seg_C[64] = {0};
+    float seg_A[64];
+    float seg_B[16];
+    for (int load_i = 0; load_i < 8; load_i++) {
+        seg_B[load_i] = d_B[matrix_B_base_offset];
+    }
+    for (int load_i = 0; load_i < TM; load_i++) {
+        seg_A[load_i] = d_A[matrix_A_base_offset + k + load_i * K + idx];
+    }
+    for (int k = 0; k < K; k += 16) {
+        for (int load_i = 0; load_i < 8; load_i++) {
+            seg_B[8 + load_i] = d_B[matrix_B_base_offset + k + 8 * N];
+        }
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 8; j++) {
+                seg_C[i * 8 + j] += seg_A[i * 8 + j] * seg_B[j];
+            }
+        }
+
+        for (int load_i = 0; load_i < 8; load_i++) {
+            seg_B[load_i] = d_B[matrix_B_base_offset + k  + 16 * N];
+        }
+        for (int i = 0; i < 8; i++) {
+            for (int j = 0; j < 8; j++) {
+                seg_C[i * 8 + j] += seg_A[i * 8 + j] * seg_B[8 + j];
+            }
+        }
+
+        // seg_B = d_B[matrix_B_base_offset + k * N + idx];
+    }
+    for (int store_i = 0; store_i < TM ;store_i++) {
+        d_C[matrix_A_base_offset + blockIdx.x * TM + store_i * N + idx] = seg_C[i];
+    }
+}
+float test10_1 () {
+    const int BM = 64;
+    const int BN = 64;
+    // const int BK = 16;
+    const int TM = 64;
+    const int TN = 1;
+    // const int padding = 4;
+    // const int WGM = 8;
+    // int thread_size = (BM * BN + reg_size * reg_size - 1) / (reg_size * reg_size);
+    test_start();
+    // dim3 block((M + BM - 1) / BM * (N + BN - 1) / BN / WGM, WGM);
+    dim3 block((M + BM - 1) / BM, (N + BM - 1) / BM);
+    dim3 thread(BN);
+    // int shared_size = sizeof(float) * (BM * (BK + padding) + BK * (BN + padding)) * 2;
+    gemm_kernel10_1<<<block, thread>>>(d_A, d_B, d_C, M, N, K);
+    KernelErrChk();
+    ErrChk(hipEventRecord(start, 0));
+    for (int i = 0; i < iteration; i++) {
+        gemm_kernel10_1<<<block, thread>>>(d_A, d_B, d_C, M, N, K);
+    }
+    test_end();
+    return elapsedTime / iteration;
+}
