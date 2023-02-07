@@ -1,174 +1,199 @@
-__global__ void gemm_kernel10(float *d_A, float *d_B, float *d_C, int M, int N, int K) {
-    const int padding = 4;
-    const int BM = 64;
-    const int BN = 64;
-    const int BK = 16;
+__global__ void sgemm_10(float alpha, float *A, float *B, float beta, float *C, int N)
+{
+
+	const int Ns = 128, Ks = 8; 
+
+	__shared__ float As[2][Ns*Ks]; 
+    __shared__ float Bs[2][Ns*Ks]; 
+
+    int bx = blockIdx.x, by = blockIdx.y; 
+    int tx = threadIdx.x; 
+    
+    int rowa = (tx%32)*4, cola = tx/32;
+    int rowb = (tx%2)*4, colb = tx/2;
+    // int rowc = (tx % 16)*8, colc = (tx/16)*8; 
+	
+    int warp_id = tx>>5;
+    int lane_id = tx&31;
+    int warp_row = warp_id & 3, warp_col = warp_id >> 2;
+    int row_w = lane_id&3, col_w = lane_id>>2;
+    int rowc = (warp_row<<5) + (row_w<<3), colc = (warp_col<<6) + (col_w<<3);
+
+
+	int abegin = Ns * bx; 
+	int astep = Ks * N; 
+
+	int bbegin = by * Ns * N; 
+	int bstep = Ks; 
+	int bend = bbegin + N;
+
+
+    //for computatiom
+    float B_reg[2][8];
+    float4 A_reg1[2], A_reg2[2]; 
+
+    float4 A_nxtile, B_nxtile; 
+
+
+    // float4 Av1[2], Bv1[2]; //load from global memory to shared memory
+    // float4 Bv2;  
+    
+    float4 Cv[16]; 
+    float4 Csum[16]; 
+    memset(Csum, 0, sizeof(Csum)); 
+
+    int write_id = 1; 
+
+
+    //load first tile to shared memory
+    int a = abegin, b = bbegin; 
+    //load tile in A
+    A_nxtile = *( (float4 *)(&A[a + N * cola + rowa]) );
+
+    *((float4 *)(&As[0][rowa + cola * Ns])) = A_nxtile;
+
+    //load tile in B
+    B_nxtile = *( (float4 *)(&B[b + N*colb + rowb]) );
+
+    Bs[0][colb + rowb * Ns] = B_nxtile.x; 
+    Bs[0][colb + (rowb + 1) * Ns] = B_nxtile.y; 
+    Bs[0][colb + (rowb + 2) * Ns] = B_nxtile.z; 
+    Bs[0][colb + (rowb + 3) * Ns] = B_nxtile.w;
+
+    __syncthreads(); 
+
+
+    // load from shared memory to register
+    // load matrix B into register
+    A_reg1[0] = *( (float4 *)(&As[0][rowc + 0*Ns]) );
+    A_reg2[0] = *( (float4 *)(&As[0][rowc + 4 + 0*Ns]) );
+
+    // load matrix B into register
+    #pragma unroll 
+    for(int i=0;i<8;i++)
+        B_reg[0][i] = Bs[0][colc + i + 0*Ns]; 
+
+    
+
+ 
+    for(; b < bend;  a += astep, b += bstep)
+    {
+
+        //load next tile into shared memory
+        //load matrix A into shared memory
+        if(b + bstep < bend)
+        {
+            A_nxtile = *( (float4 *)(&A[a + astep + N * cola + rowa]) );
+            
+            //load tile in B
+            B_nxtile = *( (float4 *)(&B[b + bstep  + N*colb + rowb]) );
+
+        }
+        
+        int load_id = write_id^1; 
+        int next_id, cur_id; 
+
+        #pragma unroll
+        for(int k=0;k<Ks;k++)
+        {
+
+            cur_id = k%2; 
+            next_id = (k+1)%2; 
+
+            // Load next register tile
+            if(k < Ks - 1)
+            {
+                //load matrix A into register from shared memory
+                A_reg1[next_id] = *( (float4 *)(&As[load_id][rowc + (k+1)*Ns]) );
+                A_reg2[next_id] = *( (float4 *)(&As[load_id][rowc + 4 + (k+1)*Ns]) );
+
+            // load matrix B into register from shared memory
+                #pragma unroll 
+                for(int i=0;i<8;i++)
+                    B_reg[next_id][i] = Bs[load_id][colc + i + (k+1)*Ns]; 
+            }
+
+
+            //compute C element
+
+            #pragma unroll 
+            for(int i=0;i<8;i++)
+            {
+                Csum[i*2 ] += A_reg1[cur_id] * B_reg[cur_id][i]; 
+                Csum[i*2 + 1] += A_reg2[cur_id] * B_reg[cur_id][i]; 
+            }
+
+        }
+
+        if(b + bstep < bend)
+        {
+           *((float4 *)(&As[write_id][rowa + cola * Ns])) = A_nxtile; 
+            Bs[write_id][colb + rowb * Ns] = B_nxtile.x; 
+            Bs[write_id][colb + (rowb + 1) * Ns] = B_nxtile.y; 
+            Bs[write_id][colb + (rowb + 2) * Ns] = B_nxtile.z; 
+            Bs[write_id][colb + (rowb + 3) * Ns] = B_nxtile.w;
+        }
+     
+        __syncthreads();
+ 
+
+        A_reg1[0] = *( (float4 *)(&As[write_id][rowc + 0*Ns]) );
+        A_reg2[0] = *( (float4 *)(&As[write_id][rowc + 4 + 0*Ns]) );
+
+        // load matrix B into register
+        #pragma unroll 
+        for(int i=0;i<8;i++)
+            B_reg[0][i] = Bs[write_id][colc + i + 0*Ns];
+
+        write_id ^= 1;
+
+    }
+
+    
+    #pragma unroll 
+    for(int i=0;i<8;i++)
+    {
+        Cv[i*2] = *( (float4 *)(&C[abegin + bbegin + N * (colc + i) + rowc ]) );
+        Cv[i*2+1] = *( (float4 *)(&C[abegin + bbegin + N * (colc + i) + rowc +4]) );
+    }
+
+
+    #pragma unroll 
+    for(int i=0;i<16;i++)
+    {
+        Cv[i] = Csum[i] * alpha + Cv[i] * beta; 
+    }
+
+
+    #pragma unroll 
+    for(int i=0;i<8;i++)
+    {
+        *( (float4 *)(&C[abegin + bbegin + N * (colc + i) + rowc ]) ) = Cv[i*2];
+        *( (float4 *)(&C[abegin + bbegin + N * (colc + i) + rowc +4]) ) = Cv[i*2+1];
+    }
+
+  
+}
+float test10 () {
+    const int m = 64;
+    const int n = 64;
+    const int k = 16;
     const int TM = 4;
     const int TN = 4;
     const int TK = 2;
-    extern __shared__ float sh[];
-    float *A_sh = sh;
-    float *B_sh = sh + 2 * BM * (BK + padding);
-    const int bl_x = blockIdx.x + blockIdx.y * gridDim.x; 
-    // const int N_tile_index = bl_x / ((N + BN - 1) / BN); // tile的列号
-    // const int M_tile_index = bl_x % ((N + BN - 1) / BN); // tile的列号
-    const int N_tile_index = blockIdx.y; // tile的行号
-    const int M_tile_index = blockIdx.x; // tile的行号
-    const int C_BM_index = threadIdx.x / ((BN + TN - 1) / TN); // tile内的4 * 4行号
-    const int C_BN_index = threadIdx.x % ((BN + TN - 1) / TN); // tile内的4 * 4列号
-    const int A_pre_thread_num = (BM * BK + blockDim.x - 1)/ blockDim.x;
-    const int B_pre_thread_num = (BK * BN + blockDim.x - 1) / blockDim.x;
-    int ix;
-    ix = threadIdx.x * A_pre_thread_num;
-    const int A_pre_thread_m = (A_pre_thread_num + BK - 1) / BK;
-    const int A_pre_thread_n = A_pre_thread_num % BK;
-    const int A_BM_index = ix / BK;
-    const int A_BN_index = ix % BK;
-    ix = threadIdx.x * B_pre_thread_num;
-    const int B_pre_thread_m = (B_pre_thread_num + BN - 1) / BN;
-    const int B_pre_thread_n = B_pre_thread_num % BN;
-    const int B_BM_index = ix / BN;
-    const int B_BN_index = ix % BN;
-    const int d_A_index = (M_tile_index * BM + A_BM_index) * K + A_BN_index;
-    const int d_B_index = (B_BM_index) * N + N_tile_index * BN + B_BN_index;
-    
-    // printf("m_index: %d, n_index: %d\BN", m_index, n_index);
-    float reg_A[TM][TK];
-    float reg_B[TK][TN];
-    float reg_C[TM][TN] = {0.0f};
-    // float total = 0.0f;
-    for (int K_tile_index = 0; K_tile_index < int((K + BK - 1) / BK); K_tile_index+= 2) {
-        set_value_matrix(&A_sh[A_BM_index * (BK + padding) + A_BN_index], &d_A[d_A_index + K_tile_index * BK], A_pre_thread_m, A_pre_thread_n, BK + padding, K);
-        set_value_matrix(&B_sh[B_BM_index * (BN + padding) + B_BN_index], &d_B[d_B_index + K_tile_index * BK * N], B_pre_thread_m, B_pre_thread_n, BN + padding, N);
-	    __syncthreads();
-        for (int k_reg_index = 0; k_reg_index < BK; k_reg_index += TK) {
-            int A_index = C_BM_index * TM * (BK + padding) + k_reg_index;
-            set_value_matrix((float *)reg_A[0], &A_sh[A_index], TM, TK, TK, BK + padding);
-            int B_index = k_reg_index * (BN + padding) + C_BN_index * TN;
-	        set_value_matrix((float *)reg_B[0], &B_sh[B_index], TK, TN, TN, BN + padding);
-            for (int k_index = 0; k_index < TK; k_index++) {
-                for (int i = 0; i < TM; i++) {
-                     for (int j = 0; j < TN; j++) {
-                         reg_C[i][j] += reg_A[i][k_index] * reg_B[k_index][j];
-		     }
-                }
-            }
-        }
-         __syncthreads();
-
-        set_value_matrix(&A_sh[BM * (BK + padding) + A_BM_index * (BK + padding) + A_BN_index], &d_A[d_A_index + (K_tile_index + 1) * BK], A_pre_thread_m, A_pre_thread_n, BK + padding, K);
-        set_value_matrix(&B_sh[BK * (BN + padding) + B_BM_index * (BN + padding) + B_BN_index], &d_B[d_B_index + (K_tile_index + 1) * BK * N], B_pre_thread_m, B_pre_thread_n, BN + padding, N);
-	    __syncthreads();
-        for (int k_reg_index = 0; k_reg_index < BK; k_reg_index += TK) {
-            int A_index = C_BM_index * TM * (BK + padding) + k_reg_index;
-            set_value_matrix((float *)reg_A[0], &A_sh[A_index], TM, TK, TK, BK + padding);
-            int B_index = k_reg_index * (BN + padding) + C_BN_index * TN;
-	        set_value_matrix((float *)reg_B[0], &B_sh[B_index], TK, TN, TN, BN + padding);
-            for (int k_index = 0; k_index < TK; k_index++) {
-                for (int i = 0; i < TM; i++) {
-                     for (int j = 0; j < TN; j++) {
-                         reg_C[i][j] += reg_A[i][k_index] * reg_B[k_index][j];
-		     }
-                }
-            }
-        }
-         __syncthreads();
-    }
-    
-    int C_index = (M_tile_index * BM + C_BM_index * TM) * N + N_tile_index * BN + C_BN_index * TN;
-    set_value_matrix(&d_C[C_index], (float *)reg_C[0], TM, TN, N, TN);
-}
-float test10 () {
-    const int BM = 64;
-    const int BN = 64;
-    const int BK = 16;
-    const int TM = 4;
-    const int TN = 4;
-    const int padding = 4;
-    const int WGM = 8;
-    // int thread_size = (BM * BN + reg_size * reg_size - 1) / (reg_size * reg_size);
+    const int padding = 8;
+    // int thread_size = (m * n + reg_size * reg_size - 1) / (reg_size * reg_size);
     test_start();
-    int thread_size = min(BM * BN, C_size);
-    // dim3 block((M + BM - 1) / BM * (N + BN - 1) / BN / WGM, WGM);
-    dim3 block((M + BM - 1) / BM, (N + BN - 1) / BN);
-    dim3 thread((BM * BN + TM * TN - 1) / (TM * TN));
-    int shared_size = sizeof(float) * (BM * (BK + padding) + BK * (BN + padding)) * 2;
-    gemm_kernel10<<<block, thread, shared_size>>>(d_A, d_B, d_C, M, N, K);
+    dim3 blocks(M/128, N/128);
+    int threads = 256;
+
+    sgemm_10<<<blocks, threads>>>(1, d_A, d_B, 0, d_C, N);
     KernelErrChk();
     ErrChk(hipEventRecord(start, 0));
     for (int i = 0; i < iteration; i++) {
-        gemm_kernel10<<<block, thread,  shared_size>>>(d_A, d_B, d_C, M, N, K);
+        sgemm_10<<<blocks, threads>>>(1, d_A, d_B, 0, d_C, N);
     }
     test_end();
     return elapsedTime / iteration;
 }
 
-
-__global__ void gemm_kernel10_1(float *d_A, float *d_B, float *d_C, int M, int N, int K) {
-    const int padding = 4;
-    const int BM = 64;
-    const int BN = 64;
-    const int TM = 64;
-    const int TN = 1;
-    const int idx = threadIdx.x; // 64
-    const int N_tile_index = blockIdx.y; // tile的行号
-    const int M_tile_index = blockIdx.x; // tile的行号
-    const int matrix_A_base_offset = blockIdx.y * TM * K;
-    const int matrix_B_base_offset = blockIdx.x * TM * N;
-    float seg_C[64] = {0};
-    float seg_A[64];
-    float seg_B[16];
-    for (int load_i = 0; load_i < 8; load_i++) {
-        seg_B[load_i] = d_B[matrix_B_base_offset];
-    }
-    for (int load_i = 0; load_i < TM; load_i++) {
-        seg_A[load_i] = d_A[matrix_A_base_offset + k + load_i * K + idx];
-    }
-    for (int k = 0; k < K; k += 16) {
-        for (int load_i = 0; load_i < 8; load_i++) {
-            seg_B[8 + load_i] = d_B[matrix_B_base_offset + k + 8 * N];
-        }
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 8; j++) {
-                seg_C[i * 8 + j] += seg_A[i * 8 + j] * seg_B[j];
-            }
-        }
-
-        for (int load_i = 0; load_i < 8; load_i++) {
-            seg_B[load_i] = d_B[matrix_B_base_offset + k  + 16 * N];
-        }
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 8; j++) {
-                seg_C[i * 8 + j] += seg_A[i * 8 + j] * seg_B[8 + j];
-            }
-        }
-
-        // seg_B = d_B[matrix_B_base_offset + k * N + idx];
-    }
-    for (int store_i = 0; store_i < TM ;store_i++) {
-        d_C[matrix_A_base_offset + blockIdx.x * TM + store_i * N + idx] = seg_C[i];
-    }
-}
-float test10_1 () {
-    const int BM = 64;
-    const int BN = 64;
-    // const int BK = 16;
-    const int TM = 64;
-    const int TN = 1;
-    // const int padding = 4;
-    // const int WGM = 8;
-    // int thread_size = (BM * BN + reg_size * reg_size - 1) / (reg_size * reg_size);
-    test_start();
-    // dim3 block((M + BM - 1) / BM * (N + BN - 1) / BN / WGM, WGM);
-    dim3 block((M + BM - 1) / BM, (N + BM - 1) / BM);
-    dim3 thread(BN);
-    // int shared_size = sizeof(float) * (BM * (BK + padding) + BK * (BN + padding)) * 2;
-    gemm_kernel10_1<<<block, thread>>>(d_A, d_B, d_C, M, N, K);
-    KernelErrChk();
-    ErrChk(hipEventRecord(start, 0));
-    for (int i = 0; i < iteration; i++) {
-        gemm_kernel10_1<<<block, thread>>>(d_A, d_B, d_C, M, N, K);
-    }
-    test_end();
-    return elapsedTime / iteration;
-}

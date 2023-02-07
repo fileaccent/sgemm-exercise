@@ -6,16 +6,16 @@
 #include <rocblas.h>
 #include <rocwmma/rocwmma.hpp>
 using namespace std;
-#define iteration 100
+#define iteration 1
 const int reg_size = 2;
-int M = 1 << 11;
-int K = 1 << 11;
-int N = 1 << 11;
+int M = 1 << 12;
+int K = 1 << 12;
+int N = 1 << 12;
 const int  m = 16;
 const int  n = 16;
 const int  k = 16;
 const int WAVE_SIZE = rocwmma::AMDGCN_WAVE_SIZE;
-// cal offset from row col and ld , in row-major matrix, ld is the width of the matrix
+typedef float Float4 __attribute__((ext_vector_type(4)));
 #define OFFSET(row, col, ld) ((row) * (ld) + (col))
 
 // transfer float4
@@ -73,10 +73,10 @@ static inline void Assert(hipError_t  code, const char *file, int line){
     h_C = (float *) malloc(C_bytes); \
     test_C = (float *) malloc(C_bytes); \
     for (int i = 0; i < A_size; i++) { \
-        h_A[i] = rand() % 7 * 0.01; \
+        h_A[i] = rand() % 3 * 0.01; \
     } \
     for (int i = 0; i < B_size; i++) { \
-        h_B[i] = rand() % 8 * 0.1; \
+        h_B[i] = rand() % 5 * 0.1; \
     } \
     float * d_A; \
     float * d_B; \
@@ -173,13 +173,37 @@ inline __device__ void global_load(float* ptr, float4 &val) {
 }
 
 template<uint32_t offset>
-inline __device__ void global_store(float* ptr, float4 &val) {
+inline __device__ void global_load(float* ptr, Float4 &val) {
+    if(offset == 0) {
+    asm volatile("\n \
+    global_load_dwordx4 %0, %1, off \n \
+    "
+    :"=v"(val)
+    :"v"(ptr)
+    );
+    return;
+    }
+    if(offset == 8) {
+    asm volatile("\n \
+    global_load_dwordx4 %0, %1, off offset:32 \n \
+    "
+    :"=v"(val)
+    :"v"(ptr));
+    }
+}
+template<uint32_t offset>
+inline __device__ void global_store(float* ptr, float4 val) {
+    Float4 mid;
+    mid.x = val.x;
+    mid.y = val.y;
+    mid.z = val.z;
+    mid.w = val.w;
     if(offset == 0*32) {
     asm volatile("\n \
     global_store_dwordx4 %1, %0, off \n \
     "
     :
-    :"v"(val), "v"(ptr));
+    :"v"(mid), "v"(ptr));
     return;
     }
     if(offset == 16) {
@@ -187,9 +211,10 @@ inline __device__ void global_store(float* ptr, float4 &val) {
     global_store_dwordx4 %1, %0, off offset:16*4*4 \n \
     "
     :
-    :"v"(val), "v"(ptr));
+    :"v"(mid), "v"(ptr));
     }
 }
+
 
 template<uint32_t cnt>
 inline __device__ void lgkmcnt(){
@@ -297,6 +322,7 @@ float rocblas_result() {
 #include"kernel_7.h"
 #include"kernel_8.h"
 #include"kernel_9.h"
+#include"kernel_10.h"
 
 int main () {
     float baseTime;
@@ -411,6 +437,11 @@ int main () {
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
     cout << "test7_7: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
     preTime = nowTime;
+    // 7.8
+    nowTime = test7_8();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test7_8: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
     // 8. 分为 warp 块执行, 无效果
     nowTime = test8();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
@@ -468,11 +499,11 @@ int main () {
     cout << "test9_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
     preTime = nowTime;
 
-    // // 10.1  
-    // nowTime = test10_1();
-    // Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    // cout << "test10_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", Glops: " << Tflops << endl;
-    // preTime = nowTime;
+    // 10  
+    nowTime = test10();
+    Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
+    cout << "test10: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    preTime = nowTime;
     // // 10.2
     // nowTime = test10_2();
     // Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;

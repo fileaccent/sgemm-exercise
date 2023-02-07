@@ -432,16 +432,8 @@ __global__ void gemm_kernel3_5(float *d_A, float *d_B, float *d_C, int M, int N,
     float *B_sh = sh + (m + padding) * k;
     int N_tile_index = blockIdx.x; // tile的列号
     int M_tile_index = blockIdx.y; // tile的行号
-    int warp_id = threadIdx.x / WAVE_SIZE; // 4
-    int warp_id_m = warp_id / 2; // 2 * 2
-    int warp_id_n = warp_id % 2;
-    int lane_id = threadIdx.x % WAVE_SIZE;
-    int lane_id_m = lane_id / 8; // 8 * 8
-    int lane_id_n = lane_id % 8;
-    // int n_index = threadIdx.x % ((n + TN - 1) / TN); // tile内的4 * 4列号
-    // int m_index = threadIdx.x / ((n + TN - 1) / TN); // tile内的4 * 4行号
-    int m_index = warp_id_m * 8 + lane_id_m;
-    int n_index = warp_id_n * 8 + lane_id_n;
+    int n_index = threadIdx.x % ((n + TN - 1) / TN); // tile内的4 * 4列号
+    int m_index = threadIdx.x / ((n + TN - 1) / TN); // tile内的4 * 4行号
     // printf("m_index: %d, n_index: %d\n", m_index, n_index);
     float reg_A[TM];
     float reg_B[TN];
