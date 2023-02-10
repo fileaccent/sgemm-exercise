@@ -6,7 +6,7 @@
 #include <rocblas.h>
 #include <rocwmma/rocwmma.hpp>
 using namespace std;
-#define iteration 1
+#define iteration 1000
 const int reg_size = 2;
 int M = 1 << 12;
 int K = 1 << 12;
@@ -16,6 +16,10 @@ const int  n = 16;
 const int  k = 16;
 const int WAVE_SIZE = rocwmma::AMDGCN_WAVE_SIZE;
 typedef float Float4 __attribute__((ext_vector_type(4)));
+typedef float Float2 __attribute__((ext_vector_type(2)));
+// #define __local __attribute__((address_space(3)))
+// __device__ inline static __local void* __to_local(unsigned x) { return (__local void*)x; }
+__device__ inline static __local void* __to_local(float* x) { return (__local void*)x; }
 #define OFFSET(row, col, ld) ((row) * (ld) + (col))
 
 // transfer float4
@@ -73,10 +77,10 @@ static inline void Assert(hipError_t  code, const char *file, int line){
     h_C = (float *) malloc(C_bytes); \
     test_C = (float *) malloc(C_bytes); \
     for (int i = 0; i < A_size; i++) { \
-        h_A[i] = rand() % 3 * 0.01; \
+        h_A[i] = rand() % 3 * 0.1; \
     } \
     for (int i = 0; i < B_size; i++) { \
-        h_B[i] = rand() % 5 * 0.1; \
+        h_B[i] = rand() % 4 * 0.01; \
     } \
     float * d_A; \
     float * d_B; \
@@ -287,7 +291,30 @@ inline __device__ void vmcnt() {
       "::);
     }
 }
-inline __device__ void fma_op(float &a, float &b, float &c) {
+template<uint32_t cnt>
+inline __device__ void vscnt() {
+    if(cnt == 0) {
+      asm volatile ("\n \
+      s_waitcnt vscnt(0) \n \
+      "::);
+    }
+    if(cnt == 1) {
+      asm volatile ("\n \
+      s_waitcnt vscnt(1) \n \
+      "::);
+    }
+    if(cnt == 2) {
+      asm volatile ("\n \
+      s_waitcnt vscnt(2) \n \
+      "::);
+    }
+    if(cnt == 4) {
+      asm volatile ("\n \
+      s_waitcnt vscnt(2) \n \
+      "::);
+    }
+}
+inline __device__ void fma_op(float &c, float &a, float &b) {
     asm volatile("\n \
           v_fma_f32 %0, %1, %2, %0  \n \
           "
@@ -344,165 +371,165 @@ int main () {
     preTime = baseTime;
     nowTime = test2();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime  <<  ", Tflops: " << Tflops << endl;
+    cout << "test2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime  <<  ", Tflops: " << Tflops  << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 3. 线程分块, 一个线程加好几个值
     nowTime = test3();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime  << ", Tflops: " << Tflops  << endl;
+    cout << "test3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime  << ", Tflops: " << Tflops  << ", Tflops_ratio: " << Tflops / 23.1  << endl;
     preTime = nowTime;
     // 3.1 寄存器缓存
     nowTime = test3_1();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test3_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops  << endl;
+    cout << "test3_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops  << ", Tflops_ratio: " << Tflops / 23.1  << endl;
     preTime = nowTime;
     // 3.2 128 * 8 * 128
     nowTime = test3_2();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test3_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops  << endl;
+    cout << "test3_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops  << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 3.3 128 * 8 * 128 用寄存器缓存
     nowTime = test3_3();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test3_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops  << endl;
+    cout << "test3_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 3.4 128 * 8 * 128 padding + A 转置
     nowTime = test3_4();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test3_4: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops  << endl;
+    cout << "test3_4: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 3.5 128 * 8 * 128 warp分块
     nowTime = test3_5();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test3_5: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops  << endl;
+    cout << "test3_5: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 3.6 128 * 8 * 128 
     nowTime = test3_6();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test3_6: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops  << endl;
+    cout << "test3_6: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
 
     // 4. 共享内存冲突处理 padding:4
     nowTime = test4();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test4: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test4: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 5. 寄存器缓存
     nowTime = test5();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test5: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test5: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 6. 数据预取或双缓存: 负优化
     nowTime = test6();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test6: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test6: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 7. 调整寄存器计算时的块
     nowTime = test7();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test7: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test7: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 7.1 调整参数
     nowTime = test7_1();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test7_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test7_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 7.2 调整参数
     nowTime = test7_2();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test7_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test7_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 7.3
     nowTime = test7_3();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test7_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test7_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 7.4
     nowTime = test7_4();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test7_4: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test7_4: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 7.5
     nowTime = test7_5();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test7_5: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test7_5: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 7.6
     nowTime = test7_6();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test7_6: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test7_6: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 7.7
     nowTime = test7_7();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test7_7: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test7_7: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 7.8
     nowTime = test7_8();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test7_8: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test7_8: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 8. 分为 warp 块执行, 无效果
     nowTime = test8();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test8: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test8: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 8.1 对齐共享内存地址
     nowTime = test8_1();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test8_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test8_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 8.2 使用向量外积
     nowTime = test8_2();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test8_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test8_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 8.3 sh_B 转置(负优化)
     nowTime = test8_3();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test8_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test8_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 8.4  warp 修改尺寸
     nowTime = test8_4();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test8_4: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test8_4: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 8.5 warp z字布局(不能说有没有优化)
     nowTime = test8_5();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test8_5: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test8_5: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 8.6
     nowTime = test8_6();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test8_6: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test8_6: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
 
     // 9. 将4 * 4 分开拆成 2 * 2 的块执行
     nowTime = test9();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test9: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test9: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 9.1
     nowTime = test9_1();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test9_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test9_1: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 9.2
     nowTime = test9_2();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test9_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test9_2: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // 9.3
     nowTime = test9_3();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test9_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test9_3: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
 
     // 10  
     nowTime = test10();
     Tflops = 2 * ((float)M * N * K) / (nowTime / 1000) / 1e12;
-    cout << "test10: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << endl;
+    cout << "test10: " << nowTime  << "ms speedup: " << preTime / nowTime << ", rocblas_ratio: " << baseTime / nowTime << ", Tflops: " << Tflops << ", Tflops_ratio: " << Tflops / 23.1 << endl;
     preTime = nowTime;
     // // 10.2
     // nowTime = test10_2();
