@@ -2,6 +2,9 @@
 本项目属于 gemm 优化(支持 cuda 和 hip)
 ========
 
+git 地址: https://github.com/fileaccent/sgemm-exercise.git
+========
+
 运行
 ---------
 hip
